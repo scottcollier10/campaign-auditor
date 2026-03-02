@@ -1,0 +1,510 @@
+{
+  "name": "Campaign Auditor v1",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "campaign-audit",
+        "responseMode": "lastNode",
+        "options": {
+          "rawBody": false
+        }
+      },
+      "id": "f3814d1f-6b16-4d5f-8199-983f83941dbc",
+      "name": "Webhook: Receive Audit Request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -448,
+        80
+      ],
+      "webhookId": "cebaf99b-e757-459f-9d80-c52cb89f97da"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================\n// NODE 2: Parse CSV Email Performance Data\n// ============================================\n// Expects CSV data as base64 in body.csv_data\n// or as raw text in body.csv_text\n// or as a file upload in binary data\n\nlet csvText = '';\n\n// Try multiple input methods\nconst input = $input.first();\n\nif (input.binary && input.binary.file) {\n  // File upload via webhook\n  const buffer = await this.helpers.getBinaryDataBuffer(0, 'file');\n  csvText = buffer.toString('utf-8');\n} else if (input.json.csv_data) {\n  // Base64 encoded\n  csvText = Buffer.from(input.json.csv_data, 'base64').toString('utf-8');\n} else if (input.json.csv_text) {\n  // Raw text\n  csvText = input.json.csv_text;\n} else {\n  // Use sample data for testing\n  csvText = `Email Name,Subject Line,Send Date,Status,Recipients,Delivered,Delivered %,Open Rate,Click Rate,Click-through Rate,Bounces,Bounce %,Unsubscribes,Unsubscribe %\nWelcome Series - Email 1,Welcome to Our Community!,2025-12-01,Sent,150,145,96.7%,28.3%,4.1%,14.5%,5,3.3%,1,0.7%\nMonthly Newsletter - Jan,January Insights,2026-01-15,Sent,140,137,97.9%,22.1%,2.8%,12.7%,3,2.1%,2,1.4%\nProduct Update,New Feature: Analytics Dashboard,2026-01-22,Sent,138,136,98.6%,31.5%,5.2%,16.5%,2,1.4%,0,0.0%\nMonthly Newsletter - Feb,February Insights,2026-02-01,Sent,134,131,97.8%,19.8%,1.9%,9.6%,3,2.2%,1,0.7%\nRe-engagement,We miss you! Special offer inside,2026-02-08,Sent,25,24,96.0%,16.0%,8.0%,50.0%,1,4.0%,0,0.0%`;\n}\n\n// Parse CSV\nconst lines = csvText.trim().split('\\n');\nconst headers = lines[0].split(',').map(h => h.trim());\n\nconst emails = lines.slice(1).map(line => {\n  // Handle commas inside quoted fields\n  const values = line.match(/(\"[^\"]*\"|[^,]+)/g) || [];\n  const row = {};\n  headers.forEach((header, i) => {\n    let val = (values[i] || '').trim().replace(/^\"|\"$/g, '');\n    row[header] = val;\n  });\n  return row;\n}).filter(row => row['Email Name']); // Skip empty rows\n\n// Calculate aggregate metrics\nconst totalSent = emails.reduce((sum, e) => sum + parseInt(e['Recipients'] || 0), 0);\nconst totalDelivered = emails.reduce((sum, e) => sum + parseInt(e['Delivered'] || 0), 0);\nconst avgOpenRate = emails.reduce((sum, e) => sum + parseFloat(e['Open Rate'] || 0), 0) / emails.length;\nconst avgClickRate = emails.reduce((sum, e) => sum + parseFloat(e['Click Rate'] || 0), 0) / emails.length;\nconst totalBounces = emails.reduce((sum, e) => sum + parseInt(e['Bounces'] || 0), 0);\nconst totalUnsubs = emails.reduce((sum, e) => sum + parseInt(e['Unsubscribes'] || 0), 0);\n\nreturn [{\n  json: {\n    emailPerformance: {\n      emails: emails,\n      aggregates: {\n        totalEmails: emails.length,\n        totalSent,\n        totalDelivered,\n        deliveryRate: ((totalDelivered / totalSent) * 100).toFixed(1),\n        avgOpenRate: avgOpenRate.toFixed(1),\n        avgClickRate: avgClickRate.toFixed(1),\n        totalBounces,\n        totalUnsubs,\n        bounceRate: ((totalBounces / totalSent) * 100).toFixed(1),\n        unsubRate: ((totalUnsubs / totalSent) * 100).toFixed(1)\n      }\n    },\n    slackChannel: input.json.channel_id || null\n  }\n}];"
+      },
+      "id": "ff1e686f-a7c2-42fc-a81f-b20ad6686848",
+      "name": "Parse CSV Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"limit\": 100,\n  \"properties\": [\n    \"firstname\",\n    \"lastname\",\n    \"email\",\n    \"lifecyclestage\",\n    \"hs_lead_status\",\n    \"hs_email_delivered\",\n    \"hs_email_open\",\n    \"hs_email_click\",\n    \"hs_email_bounce\",\n    \"hs_email_optout\",\n    \"hs_email_sends_since_last_engagement\",\n    \"hs_email_last_email_name\",\n    \"hs_email_last_send_date\"\n  ]\n}",
+        "options": {}
+      },
+      "id": "7a41c63c-9a31-48af-9480-1360fa73bbc2",
+      "name": "HubSpot: Get Contacts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        0
+      ],
+      "credentials": {
+        "hubspotApi": {
+          "id": "mHIJhzB5xcP1ULg2",
+          "name": "HubSpot account"
+        },
+        "httpHeaderAuth": {
+          "id": "u5vY99HABKKS5olQ",
+          "name": "Hubspot Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/deals/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"limit\": 100,\n  \"properties\": [\n    \"dealname\",\n    \"dealstage\",\n    \"amount\",\n    \"pipeline\",\n    \"closedate\",\n    \"createdate\",\n    \"hs_analytics_source\"\n  ]\n}",
+        "options": {}
+      },
+      "id": "08cb3188-0cfe-48a3-afd5-a3d0730592fe",
+      "name": "HubSpot: Get Deals",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        240
+      ],
+      "credentials": {
+        "hubspotApi": {
+          "id": "mHIJhzB5xcP1ULg2",
+          "name": "HubSpot account"
+        },
+        "httpHeaderAuth": {
+          "id": "u5vY99HABKKS5olQ",
+          "name": "Hubspot Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================\n// NODE 6: Assemble Analysis Payload\n// ============================================\n// Combines CSV data + HubSpot API data into\n// a structured payload for Claude analysis\n\nconst csvNode = $('Parse CSV Data').first().json;\nconst contactsData = $('HubSpot: Get Contacts').first().json;\nconst dealsData = $('HubSpot: Get Deals').first().json;\nconst listsData = { results: [\n  { properties: { hs_list_name: 'All customers', hs_list_size: '0' }},\n  { properties: { hs_list_name: 'Newsletter subscribers', hs_list_size: '0' }},\n  { properties: { hs_list_name: 'Unsubscribed', hs_list_size: '0' }}\n]};\n\nconst contacts = contactsData.results || [];\nconst deals = dealsData.results || [];\nconst lists = listsData.results || [];\n\n// ---- CRM METRICS ----\n\n// Lifecycle distribution\nconst lifecycleDistribution = {};\ncontacts.forEach(c => {\n  const stage = c.properties?.lifecyclestage || 'unknown';\n  lifecycleDistribution[stage] = (lifecycleDistribution[stage] || 0) + 1;\n});\n\n// Lead status distribution\nconst leadStatusDistribution = {};\ncontacts.forEach(c => {\n  const status = c.properties?.hs_lead_status || 'none';\n  leadStatusDistribution[status] = (leadStatusDistribution[status] || 0) + 1;\n});\n\n// Engagement health\nconst withEmailActivity = contacts.filter(c => \n  parseInt(c.properties?.hs_email_delivered || 0) > 0\n).length;\n\nconst optedOut = contacts.filter(c => \n  c.properties?.hs_email_optout === 'true'\n).length;\n\nconst disengaged = contacts.filter(c => \n  parseInt(c.properties?.hs_email_sends_since_last_engagement || 0) > 5\n).length;\n\nconst highEngagement = contacts.filter(c => {\n  const opens = parseInt(c.properties?.hs_email_open || 0);\n  const clicks = parseInt(c.properties?.hs_email_click || 0);\n  return opens > 3 || clicks > 1;\n}).length;\n\n// Deal metrics\nconst dealStages = {};\ndeals.forEach(d => {\n  const stage = d.properties?.dealstage || 'unknown';\n  dealStages[stage] = (dealStages[stage] || 0) + 1;\n});\n\nconst totalRevenue = deals.reduce((sum, d) => \n  sum + parseFloat(d.properties?.amount || 0), 0\n);\n\nconst closedWonDeals = deals.filter(d => \n  d.properties?.dealstage === 'closedwon'\n);\n\n// List/segment info\nconst segments = lists.map(l => ({\n  name: l.properties?.hs_list_name || 'Unnamed',\n  size: parseInt(l.properties?.hs_list_size || 0),\n  type: l.properties?.hs_list_type || 'unknown'\n}));\n\n// ---- ASSEMBLE PAYLOAD ----\n\nconst analysisPayload = {\n  emailPerformance: csvNode.emailPerformance,\n  \n  crmMetrics: {\n    contacts: {\n      total: contacts.length,\n      lifecycleDistribution,\n      leadStatusDistribution\n    },\n    engagement: {\n      withEmailActivity,\n      withoutEmailActivity: contacts.length - withEmailActivity,\n      optedOut,\n      disengaged,\n      highEngagement,\n      engagementRate: ((withEmailActivity / contacts.length) * 100).toFixed(1) + '%'\n    },\n    deals: {\n      total: deals.length,\n      totalRevenue,\n      closedWon: closedWonDeals.length,\n      avgDealSize: deals.length > 0 ? (totalRevenue / deals.length).toFixed(0) : 0,\n      stageDistribution: dealStages\n    },\n    segments: {\n      total: segments.length,\n      lists: segments,\n      totalSegmentedContacts: segments.reduce((sum, s) => sum + s.size, 0)\n    }\n  },\n  \n  metadata: {\n    auditDate: new Date().toISOString(),\n    portalId: '243444428',\n    tier: 'Marketing Hub Starter',\n    dataSource: 'Hybrid (API + CSV export)'\n  }\n};\n\nreturn [{\n  json: {\n    analysisPayload,\n    slackChannel: csvNode.slackChannel\n  }\n}];"
+      },
+      "id": "18950a74-1d24-420e-b0cc-4e081a757487",
+      "name": "Assemble Analysis Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.requestBody) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "ecb33327-c52b-47ad-99c5-1a07c51f5641",
+      "name": "Claude: Analyze Campaign",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        640,
+        80
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ACpyxUk8B8NfGOc8",
+          "name": "anthropic-api-key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// FORMAT: Simple Slack Message + Report Data\n// ============================================================\n// UPDATED: Adds scriptInputBase64 for Execute Command node\n// ============================================================\n\nvar claudeResponse = $input.first().json;\nvar payloadNode = $('Assemble Analysis Payload').first().json;\n\n// Extract text from Claude response\nvar analysisText = '';\nif (claudeResponse.content && claudeResponse.content[0]) {\n  analysisText = claudeResponse.content[0].text;\n}\n\n// Parse JSON with character-by-character state machine\nvar analysis;\ntry {\n  var cleaned = analysisText\n    .replace(/```json\\n?/g, '')\n    .replace(/```\\n?/g, '')\n    .trim();\n\n  var inString = false;\n  var escaped = false;\n  var fixed = '';\n  for (var i = 0; i < cleaned.length; i++) {\n    var ch = cleaned[i];\n    if (escaped) { fixed += ch; escaped = false; continue; }\n    if (ch === '\\\\' && inString) { fixed += ch; escaped = true; continue; }\n    if (ch === '\"') { inString = !inString; fixed += ch; continue; }\n    if (inString && ch === '\\n') { fixed += '\\\\n'; continue; }\n    if (inString && ch === '\\r') { fixed += '\\\\r'; continue; }\n    if (inString && ch === '\\t') { fixed += '\\\\t'; continue; }\n    fixed += ch;\n  }\n\n  analysis = JSON.parse(fixed);\n} catch (e) {\n  analysis = {\n    overallScore: 'ERR',\n    executiveSummary: 'Failed to parse Claude analysis: ' + e.message,\n    recommendations: []\n  };\n}\n\n// ---- BUILD SIMPLE MRKDWN MESSAGE ----\n\nvar scoreEmoji = {\n  'A+': '\\uD83C\\uDFC6', 'A': '\\uD83C\\uDF1F', 'A-': '\\u2B50',\n  'B+': '\\u2705', 'B': '\\uD83D\\uDC4D', 'B-': '\\uD83D\\uDC4C',\n  'C+': '\\u26A0\\uFE0F', 'C': '\\uD83D\\uDE10', 'C-': '\\uD83D\\uDC4E',\n  'D+': '\\uD83D\\uDEA8', 'D': '\\uD83D\\uDEA8', 'F': '\\uD83D\\uDD25'\n};\nvar emoji = scoreEmoji[analysis.overallScore] || '\\uD83D\\uDCCA';\n\nvar lines = [];\n\nlines.push(emoji + ' *Campaign Audit Complete \\u2014 Score: ' + analysis.overallScore + '*');\nlines.push('');\nlines.push(analysis.executiveSummary || 'Analysis complete.');\nlines.push('');\n\nif (analysis.benchmarkComparison) {\n  var bc = analysis.benchmarkComparison;\n  var benchParts = [];\n  if (bc.openRate) {\n    var oArrow = bc.openRate.verdict === 'above' ? '\\u2191' : '\\u2193';\n    benchParts.push('Open: ' + bc.openRate.yours + '% ' + oArrow + ' (ind: ' + bc.openRate.industry + '%)');\n  }\n  if (bc.clickRate) {\n    var cArrow = bc.clickRate.verdict === 'above' ? '\\u2191' : '\\u2193';\n    benchParts.push('Click: ' + bc.clickRate.yours + '% ' + cArrow + ' (ind: ' + bc.clickRate.industry + '%)');\n  }\n  if (benchParts.length) {\n    lines.push('\\uD83D\\uDCC8 *Benchmarks:* ' + benchParts.join('  \\u2022  '));\n    lines.push('');\n  }\n}\n\nif (analysis.emailAnalysis) {\n  var ea = analysis.emailAnalysis;\n  lines.push('\\uD83D\\uDCE7 *Email Performance: ' + (ea.overallRating || 'N/A') + '*');\n  lines.push('Best: *' + (ea.topPerformer || 'N/A') + '*  |  Needs work: *' + (ea.bottomPerformer || 'N/A') + '*');\n  lines.push('');\n}\n\nif (analysis.audienceHealth) {\n  var ah = analysis.audienceHealth;\n  lines.push('\\uD83D\\uDC65 *Audience Health: ' + (ah.score || 'N/A') + '*');\n  lines.push((ah.totalContacts || 0) + ' contacts  |  ' + (ah.activeRate || 0) + '% active  |  ' + (ah.disengagedRate || 0) + '% disengaged');\n  if (ah.risks && ah.risks.length > 0) {\n    lines.push('\\u26A0\\uFE0F Risk: ' + ah.risks[0]);\n  }\n  lines.push('');\n}\n\nif (analysis.recommendations && analysis.recommendations.length > 0) {\n  lines.push('\\uD83C\\uDFAF *Top Recommendations:*');\n  var maxRecs = Math.min(analysis.recommendations.length, 3);\n  for (var ri = 0; ri < maxRecs; ri++) {\n    var r = analysis.recommendations[ri];\n    var icon = r.priority === 'high' ? '\\uD83D\\uDD34' : r.priority === 'medium' ? '\\uD83D\\uDFE1' : '\\uD83D\\uDFE2';\n    lines.push(icon + ' ' + (ri + 1) + '. *' + r.title + '* \\u2014 _' + (r.expectedImpact || '') + '_');\n  }\n  lines.push('');\n}\n\nvar dateStr = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });\nvar pId = (payloadNode.analysisPayload && payloadNode.analysisPayload.metadata && payloadNode.analysisPayload.metadata.portalId) ? payloadNode.analysisPayload.metadata.portalId : 'N/A';\nlines.push('_Campaign Auditor v1  \\u2022  ' + dateStr + '  \\u2022  Portal: ' + pId + '_');\n\nvar slackMessage = lines.join('\\n');\n\n// ---- BASE64 ENCODE SCRIPT INPUT ----\n// This lets the Execute Command node pipe data to the DOCX script\n// without any Code node needing require('fs')\n\nvar scriptPayload = JSON.stringify({\n  analysis: analysis,\n  metadata: {\n    portalId: pId,\n    tier: (payloadNode.analysisPayload && payloadNode.analysisPayload.metadata && payloadNode.analysisPayload.metadata.tier) ? payloadNode.analysisPayload.metadata.tier : 'HubSpot',\n    dataSource: (payloadNode.analysisPayload && payloadNode.analysisPayload.metadata && payloadNode.analysisPayload.metadata.dataSource) ? payloadNode.analysisPayload.metadata.dataSource : 'API + CSV'\n  }\n});\nvar scriptInputBase64 = Buffer.from(scriptPayload).toString('base64');\n\nreturn [{\n  json: {\n    slackMessage: slackMessage,\n    analysis: analysis,\n    rawResponse: analysisText,\n    payload: payloadNode.analysisPayload,\n    scriptInputBase64: scriptInputBase64\n  }\n}];"
+      },
+      "id": "c81d2476-8539-44d0-b325-b9f7ffa1b374",
+      "name": "Format Slack + Report Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0AEH1BS9DH",
+          "mode": "list",
+          "cachedResultName": "marketing"
+        },
+        "text": "={{ $json.slackMessage }}",
+        "otherOptions": {}
+      },
+      "id": "3f4775c6-b0ad-4918-b0ff-7b18a97d7720",
+      "name": "Slack: Send Audit Summary",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        1504,
+        -48
+      ],
+      "webhookId": "bbb2d4c1-7983-4940-aa59-79d0a0ff98c2",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "9fcibPIkOzi3MegG",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $('Assemble Analysis Payload').first().json;\n\nconst systemPrompt = `You are a senior marketing strategist and HubSpot campaign auditor. You analyze email campaign performance data alongside CRM health metrics to produce actionable audit reports.\n\nYour analysis framework:\n\n1. EMAIL PERFORMANCE SCORING\n   - Compare each email's metrics against industry benchmarks\n   - Industry avg: Open Rate 21.5%, Click Rate 2.3%, Bounce <2%, Unsub <0.5%\n   - Score each email: A (exceptional), B (good), C (below avg), D (problem)\n   - Identify patterns: declining engagement, subject line effectiveness, timing\n\n2. AUDIENCE HEALTH ASSESSMENT\n   - Contact database completeness and quality\n   - Engagement distribution (active/passive/disengaged/opted-out)\n   - List hygiene score\n   - Segmentation maturity\n\n3. LIFECYCLE FUNNEL ANALYSIS\n   - Stage distribution vs healthy funnel benchmarks\n   - Conversion velocity indicators\n   - Revenue pipeline alignment\n   - Funnel gaps\n\n4. STRATEGIC RECOMMENDATIONS\n   - Prioritize by impact (high/medium/low) and effort (quick_win/project/initiative)\n   - Be specific with numbers from the data\n   - Reference actual data points\n   - Include what NOT to do\n\nRESPOND ONLY WITH VALID JSON. No markdown, no code fences, just JSON.\n\nCRITICAL: Keep your JSON response under 3000 tokens. Be concise in insights - one sentence each. Limit emails array to top 5 and bottom 2 performers only. Maximum 4 recommendations.\n\nJSON Structure:\n{\n  \"overallScore\": \"B+\",\n  \"executiveSummary\": \"2-3 sentence overview\",\n  \"emailAnalysis\": {\n    \"overallRating\": \"B\",\n    \"emails\": [{\"name\":\"...\",\"score\":\"A\",\"openRate\":25.0,\"clickRate\":3.0,\"insight\":\"One sentence\"}],\n    \"patterns\": [\"pattern 1\"],\n    \"topPerformer\": \"email name\",\n    \"bottomPerformer\": \"email name\"\n  },\n  \"audienceHealth\": {\n    \"score\": \"C+\",\n    \"totalContacts\": 32,\n    \"activeRate\": 45.0,\n    \"disengagedRate\": 20.0,\n    \"optOutRate\": 5.0,\n    \"findings\": [\"finding 1\"],\n    \"risks\": [\"risk 1\"]\n  },\n  \"funnelAnalysis\": {\n    \"score\": \"B-\",\n    \"distribution\": {\"lead\": 15, \"mql\": 5},\n    \"findings\": [\"finding 1\"],\n    \"gaps\": [\"gap 1\"]\n  },\n  \"recommendations\": [{\n    \"priority\": \"high\",\n    \"effort\": \"quick_win\",\n    \"title\": \"Short title\",\n    \"description\": \"Detailed recommendation\",\n    \"expectedImpact\": \"What improvement to expect\"\n  }],\n  \"benchmarkComparison\": {\n    \"openRate\": {\"yours\": 22.0, \"industry\": 21.5, \"verdict\": \"above\"},\n    \"clickRate\": {\"yours\": 1.8, \"industry\": 2.3, \"verdict\": \"below\"}\n  }\n}`;\n\nconst userMessage = `Analyze this HubSpot campaign data and provide your audit:\n\n## Email Campaign Performance (CSV Export)\n${JSON.stringify(payload.analysisPayload.emailPerformance.aggregates)}\n\nIndividual emails:\n${payload.analysisPayload.emailPerformance.emails.map(e => `${e['Email Name']}: Open ${e['Open Rate']}, Click ${e['Click Rate']}, Bounce ${e['Bounce %']}, Unsub ${e['Unsubscribe %']}`).join('\\n')}\n\n## CRM Health Metrics (HubSpot API)\n${JSON.stringify(payload.analysisPayload.crmMetrics, null, 2)}\n\n## Audit Metadata\n${JSON.stringify(payload.analysisPayload.metadata, null, 2)}\n\nProvide your complete analysis as JSON.`;\n\nreturn [{\n  json: {\n    requestBody: {\n      model: \"claude-sonnet-4-5-20250929\",\n      max_tokens: 4096,\n      system: systemPrompt,\n      messages: [\n        { role: \"user\", content: userMessage }\n      ]\n    },\n    slackChannel: payload.slackChannel\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        80
+      ],
+      "id": "feaed9ce-45e7-4f16-a641-2c05570dba50",
+      "name": "Build Claude Request"
+    },
+    {
+      "parameters": {
+        "jsCode": "var formatData = $('Format Slack + Report Data').first().json;\n\nvar scriptInput = JSON.stringify({\n  analysis: formatData.analysis,\n  metadata: {\n    portalId: formatData.payload && formatData.payload.metadata ? formatData.payload.metadata.portalId : 'N/A',\n    tier: formatData.payload && formatData.payload.metadata ? formatData.payload.metadata.tier : 'HubSpot',\n    dataSource: formatData.payload && formatData.payload.metadata ? formatData.payload.metadata.dataSource : 'API + CSV'\n  }\n});\n\nvar buffer = Buffer.from(scriptInput, 'utf-8');\n\nreturn [{\n  json: {\n    slackMessage: formatData.slackMessage,\n    analysis: formatData.analysis,\n    payload: formatData.payload\n  },\n  binary: {\n    inputFile: await this.helpers.prepareBinaryData(\n      buffer,\n      'audit-input.json',\n      'application/json'\n    )\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1088,
+        80
+      ],
+      "id": "4d15c304-39ff-4545-9883-bc997f093a14",
+      "name": "Prepare Report Input"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// NODE: \"Generate Report\" — n8n Code Node\n// ============================================================\n// Mode: Run Once for All Items\n// Place AFTER: \"Format Slack + Report Data\"\n// Wire TO: \"Send Audit Summary\" AND \"Upload Report to Slack\"\n//\n// ZERO external modules. Pure string concatenation.\n// Generates a styled HTML report uploaded as a file to Slack.\n// ============================================================\n\nvar formatData = $('Format Slack + Report Data').first().json;\nvar analysis = formatData.analysis || {};\nvar payload = formatData.payload || {};\nvar portalId = (payload.metadata && payload.metadata.portalId) ? payload.metadata.portalId : 'N/A';\nvar tier = (payload.metadata && payload.metadata.tier) ? payload.metadata.tier : 'HubSpot';\nvar dataSource = (payload.metadata && payload.metadata.dataSource) ? payload.metadata.dataSource : 'API + CSV';\nvar dateDisplay = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });\n\n// ---- Score color helper ----\nfunction sc(score) {\n  if (!score) return '#495057';\n  if (score.startsWith('A')) return '#00A854';\n  if (score.startsWith('B')) return '#2C7BE5';\n  if (score.startsWith('C')) return '#F5A623';\n  return '#E74C3C';\n}\n\nfunction escHtml(str) {\n  if (!str) return '';\n  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;');\n}\n\n// ---- Build HTML ----\nvar h = '';\n\nh += '<!DOCTYPE html>';\nh += '<html lang=\"en\"><head><meta charset=\"UTF-8\">';\nh += '<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">';\nh += '<title>Campaign Audit Report - ' + escHtml(portalId) + '</title>';\nh += '<style>';\nh += '* { margin: 0; padding: 0; box-sizing: border-box; }';\nh += 'body { font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Arial, sans-serif; color: #495057; background: #fff; line-height: 1.6; }';\nh += '.container { max-width: 800px; margin: 0 auto; padding: 40px; }';\nh += '.header { border-bottom: 3px solid #1A3A5C; padding-bottom: 20px; margin-bottom: 30px; }';\nh += '.header h1 { font-size: 28px; color: #1A3A5C; margin-bottom: 4px; }';\nh += '.header .meta { font-size: 14px; color: #6c757d; }';\nh += '.score-card { display: flex; border-radius: 8px; overflow: hidden; margin-bottom: 30px; }';\nh += '.score-badge { padding: 24px; min-width: 100px; display: flex; align-items: center; justify-content: center; }';\nh += '.score-badge span { font-size: 42px; font-weight: 800; color: #fff; }';\nh += '.score-body { background: #E8F4FD; padding: 20px 24px; flex: 1; }';\nh += '.score-body h3 { font-size: 16px; color: #1A3A5C; margin-bottom: 6px; }';\nh += '.score-body p { font-size: 14px; color: #495057; }';\nh += 'h2 { font-size: 20px; color: #1A3A5C; margin: 30px 0 16px; padding-bottom: 8px; border-bottom: 2px solid #E8F4FD; }';\nh += 'h2 .rating { font-size: 15px; font-weight: 600; margin-left: 10px; }';\nh += 'table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px; }';\nh += 'th { background: #1A3A5C; color: #fff; text-align: left; padding: 10px 12px; font-weight: 600; }';\nh += 'td { padding: 9px 12px; border-bottom: 1px solid #DEE2E6; }';\nh += 'tr:nth-child(even) td { background: #F8F9FA; }';\nh += '.verdict-good { color: #00A854; font-weight: 700; }';\nh += '.verdict-bad { color: #E74C3C; font-weight: 700; }';\nh += '.stat-grid { display: flex; gap: 12px; margin-bottom: 20px; }';\nh += '.stat-card { flex: 1; padding: 16px; border-radius: 6px; text-align: center; }';\nh += '.stat-card .val { font-size: 26px; font-weight: 800; }';\nh += '.stat-card .label { font-size: 12px; color: #6c757d; margin-top: 4px; }';\nh += '.bullet { padding: 4px 0 4px 20px; font-size: 14px; position: relative; }';\nh += '.bullet::before { content: \"\"; position: absolute; left: 0; top: 12px; width: 8px; height: 8px; border-radius: 50%; }';\nh += '.bullet-blue::before { background: #2C7BE5; }';\nh += '.bullet-red::before { background: #E74C3C; }';\nh += '.bullet-yellow::before { background: #F5A623; }';\nh += '.rec-card { display: flex; border-radius: 6px; overflow: hidden; margin-bottom: 16px; }';\nh += '.rec-num { min-width: 44px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 20px; font-weight: 800; }';\nh += '.rec-body { background: #F8F9FA; padding: 14px 18px; flex: 1; }';\nh += '.rec-body h4 { font-size: 15px; color: #1A3A5C; margin-bottom: 4px; }';\nh += '.rec-body .tags { font-size: 12px; margin-bottom: 6px; }';\nh += '.rec-body .tags .priority { font-weight: 700; text-transform: uppercase; }';\nh += '.rec-body .desc { font-size: 13px; color: #495057; }';\nh += '.rec-body .impact { font-size: 13px; color: #2C7BE5; font-style: italic; margin-top: 6px; }';\nh += '.warning-bullet { padding: 4px 0 4px 24px; font-size: 14px; }';\nh += '.footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #DEE2E6; font-size: 12px; color: #adb5bd; font-style: italic; }';\nh += '@media print { .container { padding: 20px; } .score-card, .stat-grid, .rec-card { break-inside: avoid; } }';\nh += '</style></head><body><div class=\"container\">';\n\n// === HEADER ===\nh += '<div class=\"header\">';\nh += '<h1>Campaign Audit Report</h1>';\nh += '<div class=\"meta\">HubSpot Portal ' + escHtml(portalId) + '  |  ' + escHtml(dateDisplay) + '</div>';\nh += '</div>';\n\n// === SCORE CARD ===\nvar score = analysis.overallScore || 'N/A';\nvar summary = analysis.executiveSummary || 'No summary available.';\n\nh += '<div class=\"score-card\">';\nh += '<div class=\"score-badge\" style=\"background:' + sc(score) + '\"><span>' + escHtml(score) + '</span></div>';\nh += '<div class=\"score-body\"><h3>Overall Score</h3><p>' + escHtml(summary) + '</p></div>';\nh += '</div>';\n\n// === BENCHMARK COMPARISON ===\nif (analysis.benchmarkComparison) {\n  h += '<h2>Benchmark Comparison</h2>';\n  h += '<table><tr><th>Metric</th><th>Yours</th><th>Industry Avg</th><th>Difference</th><th>Verdict</th></tr>';\n\n  var bc = analysis.benchmarkComparison;\n  var bcKeys = Object.keys(bc);\n  for (var bi = 0; bi < bcKeys.length; bi++) {\n    var key = bcKeys[bi];\n    var val = bc[key];\n    if (!val || typeof val !== 'object') continue;\n    var label = key.replace(/([A-Z])/g, ' $1').replace(/^./, function(s) { return s.toUpperCase(); });\n    var diff = (val.yours - val.industry).toFixed(1);\n    var sign = parseFloat(diff) >= 0 ? '+' : '';\n    var isReverseMetric = key === 'bounceRate' || key === 'unsubRate';\n    var isGood = isReverseMetric ? val.yours <= val.industry : val.yours >= val.industry;\n    var cls = isGood ? 'verdict-good' : 'verdict-bad';\n\n    h += '<tr>';\n    h += '<td><strong>' + escHtml(label) + '</strong></td>';\n    h += '<td>' + escHtml(String(val.yours)) + '%</td>';\n    h += '<td>' + escHtml(String(val.industry)) + '%</td>';\n    h += '<td class=\"' + cls + '\">' + sign + diff + '%</td>';\n    h += '<td class=\"' + cls + '\">' + (isGood ? 'Above' : 'Below') + '</td>';\n    h += '</tr>';\n  }\n  h += '</table>';\n}\n\n// === EMAIL PERFORMANCE ===\nif (analysis.emailAnalysis) {\n  var ea = analysis.emailAnalysis;\n  h += '<h2>Email Performance <span class=\"rating\" style=\"color:' + sc(ea.overallRating) + '\">' + escHtml(ea.overallRating || 'N/A') + '</span></h2>';\n\n  if (ea.emails && ea.emails.length > 0) {\n    h += '<table><tr><th>Email</th><th>Score</th><th>Open %</th><th>Click %</th><th>Insight</th></tr>';\n    for (var ei = 0; ei < ea.emails.length; ei++) {\n      var email = ea.emails[ei];\n      var openStr = email.openRate != null ? email.openRate + '%' : '-';\n      var clickStr = email.clickRate != null ? email.clickRate + '%' : '-';\n      h += '<tr>';\n      h += '<td><strong>' + escHtml(email.name || 'Unknown') + '</strong></td>';\n      h += '<td style=\"color:' + sc(email.score) + '; font-weight:700; text-align:center\">' + escHtml(email.score || '-') + '</td>';\n      h += '<td style=\"text-align:center\">' + escHtml(openStr) + '</td>';\n      h += '<td style=\"text-align:center\">' + escHtml(clickStr) + '</td>';\n      h += '<td style=\"font-size:12px\">' + escHtml(email.insight || '') + '</td>';\n      h += '</tr>';\n    }\n    h += '</table>';\n  }\n\n  if (ea.patterns && ea.patterns.length > 0) {\n    h += '<h3 style=\"font-size:15px; color:#1A3A5C; margin:16px 0 8px\">Key Patterns</h3>';\n    for (var pi = 0; pi < ea.patterns.length; pi++) {\n      h += '<div class=\"bullet bullet-blue\">' + escHtml(ea.patterns[pi]) + '</div>';\n    }\n  }\n}\n\n// === AUDIENCE HEALTH ===\nif (analysis.audienceHealth) {\n  var ah = analysis.audienceHealth;\n  h += '<h2>Audience Health <span class=\"rating\" style=\"color:' + sc(ah.score) + '\">' + escHtml(ah.score || 'N/A') + '</span></h2>';\n\n  var activeRate = ah.activeRate || 0;\n  var disengagedRate = ah.disengagedRate || 0;\n  var optOutRate = ah.optOutRate || 0;\n\n  h += '<div class=\"stat-grid\">';\n  h += '<div class=\"stat-card\" style=\"background:#E8F4FD\"><div class=\"val\" style=\"color:#1A3A5C\">' + escHtml(String(ah.totalContacts || 0)) + '</div><div class=\"label\">Total Contacts</div></div>';\n  h += '<div class=\"stat-card\" style=\"background:#F8F9FA\"><div class=\"val\" style=\"color:' + (activeRate > 30 ? '#00A854' : '#E74C3C') + '\">' + activeRate + '%</div><div class=\"label\">Active Rate</div></div>';\n  h += '<div class=\"stat-card\" style=\"background:#E8F4FD\"><div class=\"val\" style=\"color:#495057\">' + disengagedRate + '%</div><div class=\"label\">Disengaged</div></div>';\n  h += '<div class=\"stat-card\" style=\"background:#F8F9FA\"><div class=\"val\" style=\"color:#495057\">' + optOutRate + '%</div><div class=\"label\">Opted Out</div></div>';\n  h += '</div>';\n\n  if (ah.findings && ah.findings.length > 0) {\n    h += '<h3 style=\"font-size:15px; color:#1A3A5C; margin:16px 0 8px\">Findings</h3>';\n    for (var fi = 0; fi < ah.findings.length; fi++) {\n      h += '<div class=\"bullet bullet-red\">' + escHtml(ah.findings[fi]) + '</div>';\n    }\n  }\n\n  if (ah.risks && ah.risks.length > 0) {\n    h += '<h3 style=\"font-size:15px; color:#E74C3C; margin:16px 0 8px\">Risks</h3>';\n    for (var ri = 0; ri < ah.risks.length; ri++) {\n      h += '<div class=\"warning-bullet\">\\u26A0 ' + escHtml(ah.risks[ri]) + '</div>';\n    }\n  }\n}\n\n// === LIFECYCLE FUNNEL ===\nif (analysis.funnelAnalysis) {\n  var fa = analysis.funnelAnalysis;\n  h += '<h2>Lifecycle Funnel <span class=\"rating\" style=\"color:' + sc(fa.score) + '\">' + escHtml(fa.score || 'N/A') + '</span></h2>';\n\n  if (fa.distribution) {\n    var distKeys = Object.keys(fa.distribution);\n    var total = 0;\n    for (var ti = 0; ti < distKeys.length; ti++) {\n      total += fa.distribution[distKeys[ti]];\n    }\n\n    h += '<table><tr><th>Stage</th><th>Count</th><th>% of Total</th><th style=\"width:40%\">Distribution</th></tr>';\n    for (var di = 0; di < distKeys.length; di++) {\n      var stage = distKeys[di];\n      var count = fa.distribution[stage];\n      var pct = total > 0 ? ((count / total) * 100).toFixed(1) : '0.0';\n      var barWidth = total > 0 ? Math.round((count / total) * 100) : 0;\n\n      h += '<tr>';\n      h += '<td><strong>' + escHtml(stage.charAt(0).toUpperCase() + stage.slice(1)) + '</strong></td>';\n      h += '<td style=\"text-align:center\">' + count + '</td>';\n      h += '<td style=\"text-align:center\">' + pct + '%</td>';\n      h += '<td><div style=\"background:#E9ECEF; border-radius:4px; height:18px; width:100%\"><div style=\"background:#2C7BE5; border-radius:4px; height:18px; width:' + barWidth + '%\"></div></div></td>';\n      h += '</tr>';\n    }\n    h += '</table>';\n  }\n\n  if (fa.gaps && fa.gaps.length > 0) {\n    h += '<h3 style=\"font-size:15px; color:#1A3A5C; margin:16px 0 8px\">Funnel Gaps</h3>';\n    for (var gi = 0; gi < fa.gaps.length; gi++) {\n      h += '<div class=\"bullet bullet-yellow\">' + escHtml(fa.gaps[gi]) + '</div>';\n    }\n  }\n}\n\n// === RECOMMENDATIONS ===\nif (analysis.recommendations && analysis.recommendations.length > 0) {\n  h += '<h2 style=\"margin-top:40px\">Strategic Recommendations</h2>';\n\n  for (var rci = 0; rci < analysis.recommendations.length; rci++) {\n    var rec = analysis.recommendations[rci];\n    var pColor = rec.priority === 'high' ? '#E74C3C' : rec.priority === 'medium' ? '#F5A623' : '#00A854';\n    var effortLabel = rec.effort === 'quick_win' ? 'Quick Win' : rec.effort === 'project' ? 'Project' : (rec.effort || 'Initiative');\n\n    h += '<div class=\"rec-card\">';\n    h += '<div class=\"rec-num\" style=\"background:' + pColor + '\">' + (rci + 1) + '</div>';\n    h += '<div class=\"rec-body\">';\n    h += '<h4>' + escHtml(rec.title || 'Recommendation') + '</h4>';\n    h += '<div class=\"tags\"><span class=\"priority\" style=\"color:' + pColor + '\">' + escHtml((rec.priority || '').toUpperCase()) + ' PRIORITY</span> &nbsp;|&nbsp; ' + escHtml(effortLabel) + '</div>';\n    if (rec.description) {\n      h += '<div class=\"desc\">' + escHtml(rec.description) + '</div>';\n    }\n    if (rec.expectedImpact) {\n      h += '<div class=\"impact\">Expected Impact: ' + escHtml(rec.expectedImpact) + '</div>';\n    }\n    h += '</div></div>';\n  }\n}\n\n// === FOOTER ===\nh += '<div class=\"footer\">Report generated by Campaign Auditor v1 &nbsp;|&nbsp; Data source: ' + escHtml(dataSource) + ' &nbsp;|&nbsp; ' + escHtml(tier) + '</div>';\nh += '</div></body></html>';\n\n// ---- Return as binary file ----\nvar buffer = Buffer.from(h, 'utf-8');\nvar dateStr = new Date().toISOString().slice(0, 10);\nvar filename = 'campaign-audit-' + dateStr + '.html';\n\nreturn [{\n  json: {\n    slackMessage: formatData.slackMessage,\n    analysis: analysis,\n    payload: formatData.payload,\n    reportGenerated: true,\n    reportFilename: filename,\n    reportSize: buffer.length\n  },\n  binary: {\n    report: await this.helpers.prepareBinaryData(\n      buffer,\n      filename,\n      'text/html'\n    )\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        80
+      ],
+      "id": "11e41b8f-0df6-42b3-82c3-bb21615f8b99",
+      "name": "Generate Report"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/files.getUploadURLExternal",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "filename",
+              "value": "={{ $json.reportFilename }}"
+            },
+            {
+              "name": "length",
+              "value": "={{ $json.reportSize }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1472,
+        208
+      ],
+      "id": "d3cebfe9-46dc-4d10-a001-27b6c1039319",
+      "name": "Get Upload URL",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "G1iijhpVLYz6cMOO",
+          "name": "Slack Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "var uploadData = $input.first().json;\nvar binaryData = $('Generate Report').first().binary;\n\nreturn [{\n  json: {\n    upload_url: uploadData.upload_url,\n    file_id: uploadData.file_id\n  },\n  binary: binaryData\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1472,
+        448
+      ],
+      "id": "8610a008-8e59-4cf5-b1ea-a9ab2feed6a9",
+      "name": "Prepare Upload"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/files.completeUploadExternal",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"files\": [{\"id\": \"{{ $('Get Upload URL').first().json.file_id }}\"}],\n  \"channel_id\": \"C0AEH1BS9DH\",\n  \"initial_comment\": \"📊 Full audit report attached — download and open in browser to view\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1952,
+        240
+      ],
+      "id": "f9ccb611-3d31-48a2-843f-c38ad56e92bd",
+      "name": "Complete Upload",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "G1iijhpVLYz6cMOO",
+          "name": "Slack Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.upload_url }}",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "report"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1744,
+        240
+      ],
+      "id": "2dd3dd66-0732-4866-949f-81831e928483",
+      "name": "Upload File"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook: Receive Audit Request": {
+      "main": [
+        [
+          {
+            "node": "Parse CSV Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse CSV Data": {
+      "main": [
+        [
+          {
+            "node": "HubSpot: Get Contacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot: Get Contacts": {
+      "main": [
+        [
+          {
+            "node": "HubSpot: Get Deals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot: Get Deals": {
+      "main": [
+        [
+          {
+            "node": "Assemble Analysis Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble Analysis Payload": {
+      "main": [
+        [
+          {
+            "node": "Build Claude Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude: Analyze Campaign": {
+      "main": [
+        [
+          {
+            "node": "Format Slack + Report Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Slack + Report Data": {
+      "main": [
+        [
+          {
+            "node": "Prepare Report Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Claude Request": {
+      "main": [
+        [
+          {
+            "node": "Claude: Analyze Campaign",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Report Input": {
+      "main": [
+        [
+          {
+            "node": "Generate Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Report": {
+      "main": [
+        [
+          {
+            "node": "Get Upload URL",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Slack: Send Audit Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Upload URL": {
+      "main": [
+        [
+          {
+            "node": "Prepare Upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Upload": {
+      "main": [
+        [
+          {
+            "node": "Upload File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload File": {
+      "main": [
+        [
+          {
+            "node": "Complete Upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "0f9e81ed-d59d-45c8-a84e-a11625807f6e",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "b0e674e70f9293e1868b15b958c2708cc617466ab88e48ec393cb37b261e56a5"
+  },
+  "id": "P37uF6Pj3OlZfUCugXShB",
+  "tags": [
+    {
+      "updatedAt": "2026-02-12T18:36:30.217Z",
+      "createdAt": "2026-02-12T18:36:30.217Z",
+      "id": "iS9PtH65an7EsMTE",
+      "name": "campaign-auditor"
+    },
+    {
+      "updatedAt": "2026-02-12T03:48:50.616Z",
+      "createdAt": "2026-02-12T03:48:50.616Z",
+      "id": "z1b4Scin0dyVYiDK",
+      "name": "hubspot"
+    }
+  ]
+}
